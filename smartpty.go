@@ -77,6 +77,8 @@ func (sp *SmartPTY) Start() error {
 		return err
 	}
 	go sp.processSignals()
+	go sp.processStdout()
+	go sp.processStdin()
 	return nil
 }
 
@@ -92,6 +94,7 @@ func (sp *SmartPTY) processSignals() {
 
 func (sp *SmartPTY) processStdout() {
 	var show bool
+	var shouldDefrag bool
 	var displayBuffer []byte
 	buf := make([]byte, bufferSize)
 	defer sp.tty.Close()
@@ -107,6 +110,7 @@ func (sp *SmartPTY) processStdout() {
 		for _, cbd := range sp.callbacks {
 			if cbd.count == 0 {
 				// this callback shouldn't be called anymore
+				shouldDefrag = true
 				continue
 			}
 
@@ -133,6 +137,10 @@ func (sp *SmartPTY) processStdout() {
 				}
 				os.Stdout.Write(displayBuffer)
 			}
+		}
+
+		if shouldDefrag {
+
 		}
 	}
 	// close the signals channel to shut down processSignals()
