@@ -19,14 +19,14 @@ func main() {
 
 	// React on "Password:" expression once
 	smart.Once(pwdExpr, func(data []byte, tty *os.File) []byte {
-		// After password response there will be an echo like \n\r
-		// Let's skip it
+		// After the password response there will be an echo like \n\r
+		// Let's skip it:
 		smart.Once(echoExpr, func(data []byte, tty *os.File) []byte {
 			// When echo comes, output nothing
 			return []byte{}
 		})
 		// Send the password to the terminal
-		tty.Write([]byte("MyRo0tP@sswd\n"))
+		tty.Write([]byte("MySud0P@sswd\n"))
 		// Remove the "Password:" from the chunk of data so
 		// the user won't even notice she was prompted for passwd
 		return pwdExpr.ReplaceAll(data, []byte{})
