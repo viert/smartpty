@@ -19,7 +19,7 @@ const (
 // Use this to react on matches in stdout data. Boolean value returned
 // by the function is used to indicate if the match shouldn't be shown
 // in stdout
-type ExpressionCallback func(data []byte, tty *os.File) bool
+type ExpressionCallback func(data []byte, tty *os.File) []byte
 
 // SmartPTY represents the SmartPTY class
 type SmartPTY struct {
@@ -93,10 +93,11 @@ func (sp *SmartPTY) processSignals() {
 }
 
 func (sp *SmartPTY) processStdout() {
-	var show bool
-	var shouldDefrag bool
 	var displayBuffer []byte
+
 	buf := make([]byte, bufferSize)
+	shouldCompact := false
+
 	defer sp.tty.Close()
 
 	for !sp.finished {
@@ -107,21 +108,23 @@ func (sp *SmartPTY) processStdout() {
 			break
 		}
 
+		// copy data for the callback as we'll replace it shortly
+		displayBuffer = make([]byte, n)
+		copy(displayBuffer, buf[:n])
+
+		// searching for mathes
 		for _, cbd := range sp.callbacks {
 			if cbd.count == 0 {
 				// this callback shouldn't be called anymore
-				shouldDefrag = true
+				shouldCompact = true
 				continue
 			}
 
-			if cbd.expr.Match(buf[:n]) {
-				// copy data for the callback as we'll replace it shortly
-				data := make([]byte, n)
-				copy(data, buf[:n])
+			if cbd.expr.Match(displayBuffer) {
 
 				// run the callback
 				sp.stdinSync.Lock()
-				show = cbd.cb(data, sp.tty)
+				displayBuffer = cbd.cb(displayBuffer, sp.tty)
 				sp.stdinSync.Unlock()
 
 				// decrement callback call counter
@@ -129,22 +132,24 @@ func (sp *SmartPTY) processStdout() {
 					cbd.count--
 				}
 
-				if !show {
-					displayBuffer = cbd.expr.ReplaceAll(buf[:n], []byte{})
-				} else {
-					displayBuffer = make([]byte, n)
-					copy(displayBuffer, buf[:n])
-				}
-				os.Stdout.Write(displayBuffer)
 			}
 		}
 
-		if shouldDefrag {
+		os.Stdout.Write(displayBuffer)
 
+		if shouldCompact {
+			dfCallbacks := make([]*cbDescriptor, 0)
+			for _, cbd := range sp.callbacks {
+				if cbd.count != 0 {
+					dfCallbacks = append(dfCallbacks, cbd)
+				}
+			}
+			sp.callbacks = dfCallbacks
 		}
+
 	}
 	// close the signals channel to shut down processSignals()
-	close(sp.signals)
+	sp.Close()
 }
 
 func (sp *SmartPTY) processStdin() {
@@ -156,11 +161,10 @@ func (sp *SmartPTY) processStdin() {
 	}
 	defer terminal.Restore(int(os.Stdin.Fd()), stdinState)
 
-	buf := make([]byte, bufferSize)
-
 	syscall.SetNonblock(int(os.Stdin.Fd()), true)
 	defer syscall.SetNonblock(int(os.Stdin.Fd()), false)
 
+	buf := make([]byte, bufferSize)
 	for !sp.finished {
 		n, _ := os.Stdin.Read(buf)
 		if n > 0 {
@@ -169,4 +173,11 @@ func (sp *SmartPTY) processStdin() {
 			sp.stdinSync.Unlock()
 		}
 	}
+}
+
+// Close closes the whole process and shuts down all the goroutines
+func (sp *SmartPTY) Close() {
+	sp.finished = true
+	sp.tty.Close()
+	close(sp.signals)
 }
