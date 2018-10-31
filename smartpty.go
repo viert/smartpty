@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	bufferSize = 4096
+	bufferSize = 32768
 )
 
 // ExpressionCallback represents a SmartPTY callback function class
@@ -23,12 +23,14 @@ type ExpressionCallback func(data []byte, tty *os.File) []byte
 
 // SmartPTY represents the SmartPTY class
 type SmartPTY struct {
-	cmd       *exec.Cmd
-	callbacks []*cbDescriptor
-	signals   chan os.Signal
-	tty       *os.File
-	finished  bool
-	stdinSync *sync.Mutex
+	cmd        *exec.Cmd
+	callbacks  []*cbDescriptor
+	signals    chan os.Signal
+	tty        *os.File
+	finished   bool
+	stdinSync  *sync.Mutex
+	cbSync     *sync.Mutex
+	stdinState *terminal.State
 }
 
 type cbDescriptor struct {
@@ -46,6 +48,8 @@ func Create(cmd *exec.Cmd) *SmartPTY {
 		nil,
 		false,
 		new(sync.Mutex),
+		new(sync.Mutex),
+		nil,
 	}
 }
 
@@ -66,12 +70,15 @@ func (sp *SmartPTY) Once(expression *regexp.Regexp, cb ExpressionCallback) {
 // When maximum reactions reached the callback is disabled
 func (sp *SmartPTY) Times(expression *regexp.Regexp, cb ExpressionCallback, times int) {
 	desc := &cbDescriptor{expression, cb, times}
+	sp.cbSync.Lock()
 	sp.callbacks = append(sp.callbacks, desc)
+	sp.cbSync.Unlock()
 }
 
 // Start starts the process configured
 func (sp *SmartPTY) Start() error {
 	var err error
+
 	sp.tty, err = pty.Start(sp.cmd)
 	if err != nil {
 		return err
@@ -97,58 +104,66 @@ func (sp *SmartPTY) processStdout() {
 	buf := make([]byte, bufferSize)
 	shouldCompact := false
 
-	defer sp.tty.Close()
-
 	for !sp.finished {
 		n, err := sp.tty.Read(buf)
+
 		if err != nil {
 			// EOF
 			sp.finished = true
-			break
 		}
 
-		// copy data for the callback as we'll replace it shortly
-		displayBuffer = make([]byte, n)
-		copy(displayBuffer, buf[:n])
+		if n > 0 {
+			// copy data for the callback as we'll replace it shortly
+			displayBuffer = make([]byte, n)
+			copy(displayBuffer, buf[:n])
 
-		// searching for mathes
-		for _, cbd := range sp.callbacks {
-			if cbd.count == 0 {
-				// this callback shouldn't be called anymore
-				shouldCompact = true
-				continue
-			}
+			if len(sp.callbacks) > 0 {
 
-			if cbd.expr.Match(displayBuffer) {
+				// Preserve in-loop mutations
+				sp.cbSync.Lock()
+				callbacks := make([]*cbDescriptor, len(sp.callbacks))
+				copy(callbacks, sp.callbacks)
+				sp.cbSync.Unlock()
 
-				// run the callback
-				sp.stdinSync.Lock()
-				displayBuffer = cbd.cb(displayBuffer, sp.tty)
-				sp.stdinSync.Unlock()
+				// searching for mathes
+				for _, cbd := range callbacks {
+					if cbd.count == 0 {
+						// this callback shouldn't be called anymore
+						shouldCompact = true
+						continue
+					}
 
-				// decrement callback call counter
-				if cbd.count > 0 {
-					cbd.count--
+					if cbd.expr.Match(displayBuffer) {
+						// run the callback
+						sp.stdinSync.Lock()
+						displayBuffer = cbd.cb(displayBuffer, sp.tty)
+						sp.stdinSync.Unlock()
+
+						// decrement callback call counter
+						if cbd.count > 0 {
+							cbd.count--
+						}
+
+					}
 				}
 
 			}
-		}
 
-		os.Stdout.Write(displayBuffer)
+			os.Stdout.Write(displayBuffer)
 
-		if shouldCompact {
-			dfCallbacks := make([]*cbDescriptor, 0)
-			for _, cbd := range sp.callbacks {
-				if cbd.count != 0 {
-					dfCallbacks = append(dfCallbacks, cbd)
+			if shouldCompact {
+				dfCallbacks := make([]*cbDescriptor, 0)
+				sp.cbSync.Lock()
+				for _, cbd := range sp.callbacks {
+					if cbd.count != 0 {
+						dfCallbacks = append(dfCallbacks, cbd)
+					}
 				}
+				sp.callbacks = dfCallbacks
+				sp.cbSync.Unlock()
 			}
-			sp.callbacks = dfCallbacks
 		}
-
 	}
-	// close the signals channel to shut down processSignals()
-	sp.Close()
 }
 
 func (sp *SmartPTY) processStdin() {
@@ -158,25 +173,43 @@ func (sp *SmartPTY) processStdin() {
 		sp.finished = true
 		return
 	}
-	defer terminal.Restore(int(os.Stdin.Fd()), stdinState)
-
-	syscall.SetNonblock(int(os.Stdin.Fd()), true)
-	defer syscall.SetNonblock(int(os.Stdin.Fd()), false)
+	sp.stdinState = stdinState
 
 	buf := make([]byte, bufferSize)
 	for !sp.finished {
-		n, _ := os.Stdin.Read(buf)
-		if n > 0 {
+		nr, er := os.Stdin.Read(buf)
+		if nr > 0 {
 			sp.stdinSync.Lock()
-			sp.tty.Write(buf[:n])
+			nw, ew := sp.tty.Write(buf[:nr])
 			sp.stdinSync.Unlock()
+			if ew != nil {
+				// error writing to terminal
+				sp.finished = true
+			}
+			if nr != nw {
+				// short write
+				sp.finished = true
+			}
+		}
+
+		if er != nil {
+			sp.finished = true
 		}
 	}
 }
 
+func isEAGAIN(err error) bool {
+	if pe, ok := err.(*os.PathError); ok {
+		if errno, ok := pe.Err.(syscall.Errno); ok && errno == syscall.EAGAIN {
+			return true
+		}
+	}
+	return false
+}
+
 // Close closes the whole process and shuts down all the goroutines
 func (sp *SmartPTY) Close() {
-	sp.finished = true
 	sp.tty.Close()
 	close(sp.signals)
+	terminal.Restore(int(os.Stdin.Fd()), sp.stdinState)
 }
