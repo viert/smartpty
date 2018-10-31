@@ -85,11 +85,10 @@ func (sp *SmartPTY) Start() error {
 func (sp *SmartPTY) processSignals() {
 	signal.Notify(sp.signals, syscall.SIGWINCH)
 	defer signal.Reset()
+	sp.signals <- syscall.SIGWINCH
 	for range sp.signals {
 		pty.InheritSize(os.Stdin, sp.tty)
 	}
-	sp.signals <- syscall.SIGWINCH
-
 }
 
 func (sp *SmartPTY) processStdout() {
