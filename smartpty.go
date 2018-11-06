@@ -149,7 +149,6 @@ func (sp *SmartPTY) processStdout() {
 
 					}
 				}
-
 			}
 
 			os.Stdout.Write(displayBuffer)
