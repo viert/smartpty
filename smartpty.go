@@ -2,6 +2,7 @@ package smartpty
 
 import (
 	"github.com/kr/pty"
+	"github.com/npat-efault/poller"
 	"golang.org/x/crypto/ssh/terminal"
 	"os"
 	"os/exec"
@@ -30,6 +31,7 @@ type SmartPTY struct {
 	finished   bool
 	stdinSync  *sync.Mutex
 	cbSync     *sync.Mutex
+	stdinPFD   *poller.FD
 	stdinState *terminal.State
 }
 
@@ -49,6 +51,7 @@ func Create(cmd *exec.Cmd) *SmartPTY {
 		false,
 		new(sync.Mutex),
 		new(sync.Mutex),
+		nil,
 		nil,
 	}
 }
@@ -175,9 +178,15 @@ func (sp *SmartPTY) processStdin() {
 	}
 	sp.stdinState = stdinState
 
+	sp.stdinPFD, err = poller.Open("/dev/stdin", poller.O_RO)
+	if err != nil {
+		sp.finished = true
+		return
+	}
+
 	buf := make([]byte, bufferSize)
 	for !sp.finished {
-		nr, er := os.Stdin.Read(buf)
+		nr, er := sp.stdinPFD.Read(buf)
 		if nr > 0 {
 			sp.stdinSync.Lock()
 			nw, ew := sp.tty.Write(buf[:nr])
@@ -198,18 +207,10 @@ func (sp *SmartPTY) processStdin() {
 	}
 }
 
-func isEAGAIN(err error) bool {
-	if pe, ok := err.(*os.PathError); ok {
-		if errno, ok := pe.Err.(syscall.Errno); ok && errno == syscall.EAGAIN {
-			return true
-		}
-	}
-	return false
-}
-
 // Close closes the whole process and shuts down all the goroutines
 func (sp *SmartPTY) Close() {
 	sp.tty.Close()
 	close(sp.signals)
+	sp.stdinPFD.Close()
 	terminal.Restore(int(os.Stdin.Fd()), sp.stdinState)
 }
