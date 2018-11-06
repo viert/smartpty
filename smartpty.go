@@ -146,7 +146,6 @@ func (sp *SmartPTY) processStdout() {
 						if cbd.count > 0 {
 							cbd.count--
 						}
-
 					}
 				}
 			}

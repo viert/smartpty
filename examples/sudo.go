@@ -26,7 +26,7 @@ func main() {
 			return []byte{}
 		})
 		// Send the password to the terminal
-		tty.Write([]byte("MySud0P@sswd\n"))
+		tty.Write([]byte("MyR0otP@sswD\n"))
 		// Remove the "Password:" from the chunk of data so
 		// the user won't even notice she was prompted for passwd
 		return pwdExpr.ReplaceAll(data, []byte{})
@@ -36,6 +36,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer smart.Close()
 	cmd.Wait()
+
 	fmt.Println("Program exited")
 }
