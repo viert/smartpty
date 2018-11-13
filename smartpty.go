@@ -24,15 +24,16 @@ type ExpressionCallback func(data []byte, tty *os.File) []byte
 
 // SmartPTY represents the SmartPTY class
 type SmartPTY struct {
-	cmd        *exec.Cmd
-	callbacks  []*cbDescriptor
-	signals    chan os.Signal
-	tty        *os.File
-	finished   bool
-	stdinSync  *sync.Mutex
-	cbSync     *sync.Mutex
-	stdinPFD   *poller.FD
-	stdinState *terminal.State
+	cmd         *exec.Cmd
+	callbacks   []*cbDescriptor
+	signals     chan os.Signal
+	tty         *os.File
+	finished    bool
+	stdinSync   *sync.Mutex
+	cbSync      *sync.Mutex
+	stdinPFD    *poller.FD
+	stdinState  *terminal.State
+	stdinBackup int
 }
 
 type cbDescriptor struct {
@@ -53,6 +54,7 @@ func Create(cmd *exec.Cmd) *SmartPTY {
 		new(sync.Mutex),
 		nil,
 		nil,
+		0,
 	}
 }
 
@@ -86,6 +88,12 @@ func (sp *SmartPTY) Start() error {
 	if err != nil {
 		return err
 	}
+
+	sp.stdinBackup, err = syscall.Dup(int(os.Stdin.Fd()))
+	if err != nil {
+		return err
+	}
+
 	go sp.processSignals()
 	go sp.processStdout()
 	go sp.processStdin()
@@ -176,7 +184,7 @@ func (sp *SmartPTY) processStdin() {
 	}
 	sp.stdinState = stdinState
 
-	sp.stdinPFD, err = poller.Open("/dev/stdin", poller.O_RO)
+	sp.stdinPFD, err = poller.NewFD(int(os.Stdin.Fd()))
 	if err != nil {
 		sp.finished = true
 		return
@@ -210,5 +218,6 @@ func (sp *SmartPTY) Close() {
 	sp.tty.Close()
 	close(sp.signals)
 	sp.stdinPFD.Close()
+	syscall.Dup2(sp.stdinBackup, int(os.Stdin.Fd()))
 	terminal.Restore(int(os.Stdin.Fd()), sp.stdinState)
 }
