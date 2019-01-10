@@ -16,8 +16,11 @@ starts the terminal. Be sure to configure reaction callbacks before calling Star
 closes the terminal and stops all the goroutines. This is not very useful as you can always call myCmd.Process.Kill() which will close related file descriptors and SmartPTY goroutines processing stdin/stdout should then stop automatically.
 
 **func (sp \*SmartPTY) Once(expr \*regexp.Regexp, cb ExpressionCallback)**
+
 **func (sp \*SmartPTY) Always(expr \*regexp.Regexp, cb ExpressionCallback)**
+
 **func (sp \*SmartPTY) Times(expr \*regexp.Regexp, cb ExpressionCallback, int times)**
+
 These functions create a reaction callback based on `expr` argument. When SmartPTY finds a chunk of data matching the expression, the `cb` function is called. The difference between these functions are kinda self-explanatory: `Once()` will run the callback just once, `Always()` will run its callback every time SmartPTY receives the matching chunk of data, and `Times()` will react exactly `times` times.
 
 **type ExpressionCallback func(data []byte, tty \*os.File) []byte**
